@@ -194,4 +194,4 @@ def get_recently_played_games(steam_id: str) -> list[dict]:
 
 def build_frontend_redirect_url(steam_id: str) -> str:
     """Redirect the browser back to Streamlit with the SteamID in the query string."""
-    return f"{FRONTEND_BASE_URL}?steam_id={steam_id}"
+    return f"{FRONTEND_BASE_URL}?steam_id={steam_id}&auth=steam"

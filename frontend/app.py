@@ -152,6 +152,27 @@ def set_query_param(name: str, value: str) -> None:
     st.query_params[name] = value
 
 
+def clear_query_param(name: str) -> None:
+    try:
+        if name in st.query_params:
+            del st.query_params[name]
+    except Exception:
+        # Fallback for older Streamlit query param behavior.
+        st.query_params[name] = ""
+
+
+def clear_steam_session() -> None:
+    st.session_state.steam_id = ""
+    st.session_state.steam_input = ""
+    st.session_state.steam_authenticated = False
+    st.session_state.last_steam_id_from_url = ""
+    st.session_state.last_steam_auth_loaded_id = ""
+    st.session_state.pop("library", None)
+    st.session_state.pop("recs", None)
+    clear_query_param("steam_id")
+    clear_query_param("auth")
+
+
 def load_library(steam_id: str) -> dict | None:
     response = requests.get(
         f"{BACKEND_BASE_URL}/api/user/library",
@@ -233,7 +254,7 @@ def to_user_friendly_error(message: str) -> str:
     if "could not resolve vanity profile url" in low:
         return "That custom Steam profile link is invalid. Cause: the vanity name was not found."
     if "invalid steam input" in low:
-        return "Invalid input format. Use a Steam profile link or a 17-digit SteamID64."
+        return "Invalid input format. Use a Steam profile link or a 17-digit SteamID."
     if "steam_api_key is missing" in low:
         return "Service is temporarily unavailable. Cause: Steam API key is not configured on the server."
     if "timed out" in low or "timeout" in low:
@@ -262,47 +283,72 @@ def get_error_message(response: requests.Response) -> str:
 st.title("Steam Personalized Recommender")
 
 steam_id_from_url = get_query_param("steam_id", "")
+auth_from_url = get_query_param("auth", "")
 
 if "steam_id" not in st.session_state:
     st.session_state.steam_id = ""
 if "steam_input" not in st.session_state:
     st.session_state.steam_input = ""
+if "steam_authenticated" not in st.session_state:
+    st.session_state.steam_authenticated = False
 if "last_steam_id_from_url" not in st.session_state:
     st.session_state.last_steam_id_from_url = ""
+if "last_steam_auth_loaded_id" not in st.session_state:
+    st.session_state.last_steam_auth_loaded_id = ""
 
-# Sync from URL only when URL value changes (e.g., fresh login callback),
-# so we don't overwrite what the user is currently typing.
+# Sync SteamID from URL only when SteamID actually changes (fresh callback),
+# so reruns don't overwrite current local state.
 if steam_id_from_url and steam_id_from_url != st.session_state.last_steam_id_from_url:
     st.session_state.steam_id = steam_id_from_url
     st.session_state.steam_input = steam_id_from_url
     st.session_state.last_steam_id_from_url = steam_id_from_url
 
+# Mark Steam-authenticated only when callback explicitly provides auth=steam.
+if auth_from_url == "steam" and steam_id_from_url:
+    st.session_state.steam_authenticated = True
+    if st.session_state.last_steam_auth_loaded_id != steam_id_from_url:
+        library = load_library(steam_id_from_url)
+        if library:
+            st.session_state.library = library
+            st.session_state.pop("recs", None)
+        st.session_state.last_steam_auth_loaded_id = steam_id_from_url
+    clear_query_param("auth")
+
 with st.sidebar:
     st.header("Login")
-    st.markdown(
-        f'<a class="steam-login-btn" href="{BACKEND_BASE_URL}/login/steam" target="_self">'
-        f"Sign in with Steam"
-        f"</a>",
-        unsafe_allow_html=True,
-    )
+    is_steam_authenticated = bool(st.session_state.steam_authenticated)
+    if is_steam_authenticated:
+        if st.button("Sign out", use_container_width=True):
+            clear_steam_session()
+            st.rerun()
+    else:
+        st.markdown(
+            f'<a class="steam-login-btn" href="{BACKEND_BASE_URL}/login/steam" target="_self">'
+            f"Sign in with Steam"
+            f"</a>",
+            unsafe_allow_html=True,
+        )
 
     st.divider()
     st.write("Or paste a Steam profile link:")
     st.text_input(
-        "Steam profile URL or SteamID64",
+        "Steam profile URL or SteamID",
         key="steam_input",
-        placeholder="Profile URL / SteamID64",
+        placeholder="Profile URL / SteamID",
     )
     if st.button("Use this profile"):
         candidate = st.session_state.steam_input.strip()
         if not candidate:
-            st.error("Please enter a Steam profile link or SteamID64.")
+            st.error("Please enter a Steam profile link or SteamID.")
         else:
             try:
                 resolved = resolve_steam_input(candidate)
                 if resolved:
                     st.session_state.steam_id = resolved
+                    st.session_state.steam_authenticated = False
+                    st.session_state.last_steam_auth_loaded_id = ""
                     set_query_param("steam_id", resolved)
+                    clear_query_param("auth")
                     st.session_state.last_steam_id_from_url = resolved
                     library = load_library(resolved)
                     if library:
@@ -322,7 +368,11 @@ if not steam_id:
 st.success(f"Using SteamID: {steam_id}")
 
 num_recs = st.number_input("Number of recommendations", min_value=1, max_value=20, value=10, step=1)
-if st.button("Get Personalized Recommendations", use_container_width=True):
+left_col, center_col, right_col = st.columns([2, 1, 2])
+with center_col:
+    get_recs_clicked = st.button("Get Personalized Recommendations", use_container_width=False)
+
+if get_recs_clicked:
     recs = load_recommendations(steam_id, int(num_recs))
     if recs:
         st.session_state.recs = recs
