@@ -92,34 +92,45 @@ def resolve_steam_input_to_id(steam_input: str) -> str:
     if not raw:
         raise ValueError("Steam input is empty")
 
-    if STEAM_ID64_ONLY_PATTERN.match(raw):
-        return raw
+    candidate_steam_id: str | None = None
 
-    if not raw.startswith(("http://", "https://")) and raw.startswith("steamcommunity.com/"):
+    if STEAM_ID64_ONLY_PATTERN.match(raw):
+        candidate_steam_id = raw
+
+    if candidate_steam_id is None and not raw.startswith(("http://", "https://")) and raw.startswith("steamcommunity.com/"):
         raw = f"https://{raw}"
 
-    profile_match = STEAM_PROFILE_URL_PATTERN.match(raw)
+    profile_match = STEAM_PROFILE_URL_PATTERN.match(raw) if candidate_steam_id is None else None
     if profile_match:
-        return profile_match.group(1)
+        candidate_steam_id = profile_match.group(1)
 
-    vanity_match = STEAM_VANITY_URL_PATTERN.match(raw)
+    vanity_match = STEAM_VANITY_URL_PATTERN.match(raw) if candidate_steam_id is None else None
     if vanity_match:
         vanity_name = vanity_match.group(1)
         resolved = resolve_vanity_url(vanity_name)
         if resolved:
-            return resolved
-        raise ValueError("Could not resolve vanity profile URL to SteamID")
+            candidate_steam_id = resolved
+        else:
+            raise ValueError("Could not resolve vanity profile URL to SteamID")
 
     # Optional convenience: allow passing vanity slug directly.
-    if re.match(r"^[A-Za-z0-9_-]{2,64}$", raw):
+    if candidate_steam_id is None and re.match(r"^[A-Za-z0-9_-]{2,64}$", raw):
         resolved = resolve_vanity_url(raw)
         if resolved:
-            return resolved
+            candidate_steam_id = resolved
 
-    raise ValueError(
-        "Invalid Steam input. Use SteamID64, steamcommunity.com/profiles/<id>, "
-        "or steamcommunity.com/id/<vanity>."
-    )
+    if candidate_steam_id is None:
+        raise ValueError(
+            "Invalid Steam input. Use SteamID64, steamcommunity.com/profiles/<id>, "
+            "or steamcommunity.com/id/<vanity>."
+        )
+
+    # Validate that the resolved ID corresponds to a real Steam profile.
+    profile = get_player_summary(candidate_steam_id)
+    if not profile:
+        raise ValueError("Steam profile not found for this ID/link.")
+
+    return candidate_steam_id
 
 
 def get_player_summary(steam_id: str) -> dict:
