@@ -3,6 +3,90 @@ from __future__ import annotations
 import requests
 import streamlit as st
 
+st.set_page_config(page_title="Steam Personalized Recommender", layout="wide")
+
+st.markdown("""
+<style>
+/* Main app background */
+.stApp {
+    background-color: #1b2838;
+    color: #c7d5e0;
+}
+
+/* Main text */
+html, body, [class*="css"] {
+    color: #c7d5e0;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background-color: #171a21;
+}
+
+/* Buttons */
+.stButton > button {
+    background-color: #66c0f4;
+    color: #1b2838;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+.stButton > button:hover {
+    background-color: #8fd3ff;
+    color: #171a21;
+}
+
+/* Text input */
+.stTextInput input {
+    background-color: #2a475e;
+    color: #ffffff;
+    border: 1px solid #66c0f4;
+    border-radius: 8px;
+}
+
+/* Number input */
+.stNumberInput input {
+    background-color: #2a475e;
+    color: #ffffff;
+    border: 1px solid #66c0f4;
+    border-radius: 8px;
+}
+
+/* Expanders */
+.streamlit-expanderHeader {
+    background-color: #2a475e;
+    color: #c7d5e0;
+    border-radius: 6px;
+}
+
+/* Dataframe / table container */
+div[data-testid="stDataFrame"] {
+    background-color: #2a475e;
+    border-radius: 8px;
+    padding: 6px;
+}
+
+/* Success/info/warning boxes */
+div[data-baseweb="notification"] {
+    border-radius: 8px;
+}
+
+/* Headings */
+h1, h2, h3 {
+    color: #ffffff;
+}
+
+/* Links */
+a {
+    color: #66c0f4 !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+
 BACKEND_BASE_URL = "http://127.0.0.1:8000"
 
 
@@ -43,7 +127,18 @@ def load_recommendations(steam_id: str, n: int) -> dict | None:
     return None
 
 
-st.set_page_config(page_title="Steam Personalized Recommender", layout="wide")
+def resolve_steam_input(steam_input: str) -> str | None:
+    response = requests.get(
+        f"{BACKEND_BASE_URL}/api/resolve-steam-id",
+        params={"steam_input": steam_input},
+        timeout=20,
+    )
+    if response.ok:
+        return response.json().get("steam_id")
+    st.error(response.text)
+    return None
+
+
 st.title("Steam Personalized Recommender")
 
 steam_id_from_url = get_query_param("steam_id", "")
@@ -65,16 +160,22 @@ with st.sidebar:
     )
 
     st.divider()
-    st.write("Or paste a SteamID manually:")
-    manual_id = st.text_input("SteamID64", value=st.session_state.steam_id)
-    if st.button("Use this SteamID"):
-        st.session_state.steam_id = manual_id.strip()
-        set_query_param("steam_id", st.session_state.steam_id)
+    st.write("Or paste a Steam profile link:")
+    manual_input = st.text_input(
+        "Steam profile URL or SteamID64",
+        value=st.session_state.steam_id,
+        placeholder="https://steamcommunity.com/id/yourname",
+    )
+    if st.button("Use this profile"):
+        resolved = resolve_steam_input(manual_input.strip())
+        if resolved:
+            st.session_state.steam_id = resolved
+            set_query_param("steam_id", resolved)
 
 steam_id = st.session_state.steam_id.strip()
 
 if not steam_id:
-    st.info("Sign in with Steam or paste a SteamID64 to continue.")
+    st.info("Sign in with Steam or paste a Steam profile link to continue.")
     st.stop()
 
 st.success(f"Using SteamID: {steam_id}")

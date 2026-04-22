@@ -1,3 +1,11 @@
 .env
 __pycache__/
 *.pyc
+
+chat_dump_*.html
+chat_dump_*.err.txt
+chat_share*.html
+chat_transcript*.txt
+extracted_strings.txt
+
+.streamlit/

@@ -10,6 +10,7 @@ from backend.steam_auth import (
     build_steam_login_url,
     verify_openid_response,
     extract_steam_id,
+    resolve_steam_input_to_id,
     get_owned_games,
     get_recently_played_games,
     get_player_summary,
@@ -79,15 +80,20 @@ def auth_steam_callback(request: Request):
 @app.get("/api/user/library")
 def user_library(steam_id: str = Query(...)):
     try:
-        profile = get_player_summary(steam_id)
-        owned_games = get_owned_games(steam_id)
-        recent_games = get_recently_played_games(steam_id)
+        resolved_steam_id = resolve_steam_input_to_id(steam_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        profile = get_player_summary(resolved_steam_id)
+        owned_games = get_owned_games(resolved_steam_id)
+        recent_games = get_recently_played_games(resolved_steam_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     return JSONResponse(
         {
-            "steam_id": steam_id,
+            "steam_id": resolved_steam_id,
             "profile": profile,
             "owned_games_count": len(owned_games),
             "recent_games_count": len(recent_games),
@@ -108,13 +114,28 @@ def recommendations(steam_id: str = Query(...), n: int = Query(10, ge=1, le=50))
         )
 
     try:
-        owned_games = get_owned_games(steam_id)
+        resolved_steam_id = resolve_steam_input_to_id(steam_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        owned_games = get_owned_games(resolved_steam_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     # Private profile wala empty library -> fallback
     result = recommender.recommend_for_user(owned_games=owned_games, n=n)
-    result["steam_id"] = steam_id
+    result["steam_id"] = resolved_steam_id
     result["owned_games_count"] = len(owned_games)
 
     return JSONResponse(result)
+
+
+@app.get("/api/resolve-steam-id")
+def resolve_steam_id(steam_input: str = Query(...)):
+    try:
+        resolved = resolve_steam_input_to_id(steam_input)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"steam_input": steam_input, "steam_id": resolved}
