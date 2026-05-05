@@ -59,7 +59,6 @@ SELECT
     gm.owners_min,
     gm.owners_max,
     gm.price,
-    gm.initial_price,
     gm.discount
 FROM game g
 LEFT JOIN game_metrics gm 
@@ -88,7 +87,6 @@ def main() -> None:
     # Fill numeric columns
     numeric_cols = [
         "price",
-        "initial_price",
         "discount",
         "avg_playtime",
         "median_playtime",
@@ -137,10 +135,7 @@ def main() -> None:
     # Numeric features for hybrid model
     hybrid_numeric_cols = [
         "price",
-        "initial_price",
         "discount",
-        "avg_playtime",
-        "median_playtime",
         "player_count",
         "positive_review_rate",
         "estimated_owners",

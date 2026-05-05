@@ -46,20 +46,18 @@ class SteamRecommender:
             total = pos + neg
             df["positive_review_rate"] = np.where(total > 0, pos / total, 0)
 
-        for col in ["player_count", "avg_playtime", "estimated_owners"]:
+        for col in ["player_count", "estimated_owners"]:
             if col not in df.columns:
                 df[col] = 0
             df[col] = df[col].fillna(0)
 
         max_players = max(float(df["player_count"].max()), 1.0)
         max_owners = max(float(df["estimated_owners"].max()), 1.0)
-        max_playtime = max(float(df["avg_playtime"].max()), 1.0)
 
         df["fallback_score"] = (
-            0.45 * df["positive_review_rate"] +
-            0.25 * (df["player_count"] / max_players) +
-            0.20 * (df["estimated_owners"] / max_owners) +
-            0.10 * (df["avg_playtime"] / max_playtime)
+            0.50 * df["positive_review_rate"] +
+            0.30 * (df["player_count"] / max_players) +
+            0.20 * (df["estimated_owners"] / max_owners)
         )
 
         top = df.sort_values("fallback_score", ascending=False).head(n)
