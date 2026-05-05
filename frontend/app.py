@@ -1,129 +1,31 @@
 from __future__ import annotations
 
 import json
+from html import escape
+from pathlib import Path
+from urllib.parse import quote_plus
 import requests
 import streamlit as st
 
 st.set_page_config(page_title="Steam Personalized Recommender", layout="wide")
 
-st.markdown("""
-<style>
-/* Main app background */
-.stApp {
-    background-color: #1b2838;
-    color: #c7d5e0;
-}
+FRONTEND_DIR = Path(__file__).resolve().parent
+CSS_PATH = FRONTEND_DIR / "styles.css"
 
-/* Main text */
-html, body, [class*="css"] {
-    color: #c7d5e0;
-}
 
-/* Sidebar */
-section[data-testid="stSidebar"] {
-    background-color: #171a21;
-}
+def inject_stylesheet() -> None:
+    if not CSS_PATH.exists():
+        return
+    css = CSS_PATH.read_text(encoding="utf-8")
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
-/* Buttons */
-.stButton > button {
-    background: linear-gradient(135deg, #66c0f4, #39a9ea);
-    color: #102031;
-    border: 1px solid #8fd3ff;
-    border-radius: 8px;
-    font-weight: bold;
-    box-shadow: 0 2px 12px rgba(60, 160, 220, 0.35);
-    transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
-}
 
-.stButton > button:hover {
-    filter: brightness(1.05);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 14px rgba(60, 160, 220, 0.45);
-    color: #102031;
-}
-
-.stButton > button:active {
-    transform: translateY(0);
-}
-
-/* Text input */
-.stTextInput input {
-    background-color: #2a475e;
-    color: #ffffff;
-    border: 1px solid #66c0f4;
-    border-radius: 8px;
-}
-
-/* Number input */
-.stNumberInput input {
-    background-color: #2a475e;
-    color: #ffffff;
-    border: 1px solid #66c0f4;
-    border-radius: 8px;
-}
-
-/* Expanders */
-.streamlit-expanderHeader {
-    background-color: #2a475e;
-    color: #c7d5e0;
-    border-radius: 6px;
-}
-
-/* Dataframe / table container */
-div[data-testid="stDataFrame"] {
-    background-color: #2a475e;
-    border-radius: 8px;
-    padding: 6px;
-}
-
-/* Success/info/warning boxes */
-div[data-baseweb="notification"] {
-    border-radius: 8px;
-}
-
-/* Headings */
-h1, h2, h3 {
-    color: #ffffff;
-}
-
-/* Links */
-a {
-    color: #66c0f4 !important;
-}
-
-/* Steam login button (custom link styled as button) */
-.steam-login-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    padding: 0.55rem 0.9rem;
-    border-radius: 8px;
-    border: 1px solid #8fd3ff;
-    background: linear-gradient(135deg, #66c0f4, #39a9ea);
-    color: #102031 !important;
-    font-weight: 700;
-    text-decoration: none !important;
-    box-shadow: 0 2px 12px rgba(60, 160, 220, 0.35);
-    transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
-}
-
-.steam-login-btn:hover {
-    filter: brightness(1.05);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 14px rgba(60, 160, 220, 0.45);
-}
-
-.steam-login-btn:active {
-    transform: translateY(0);
-}
-
-</style>
-""", unsafe_allow_html=True)
-
+inject_stylesheet()
 
 
 BACKEND_BASE_URL = "http://127.0.0.1:8000"
+RECS_N_QUERY_PARAM = "recs_n"
+DEFAULT_RECS_COUNT = 10
 HIDDEN_RECENT_GAME_COLUMNS = {
     "appid",
     "img_icon_url",
@@ -137,6 +39,34 @@ RECOMMENDATION_COLUMN_LABELS = {
     "avg_playtime": "avg_playtime (min)",
     "price": "price (USD)",
 }
+COVER_PLACEHOLDER_BASE = "https://placehold.co/460x215/0d2338/8fd8ff?text="
+
+
+def render_hero() -> None:
+    st.markdown(
+        """
+        <section class="hero-shell">
+          <p class="hero-kicker">PERSONALIZED DISCOVERY</p>
+          <h1>Steam Recommender</h1>
+          <p class="hero-sub">
+            Connect your Steam profile and get high-confidence game picks based on what you actually play.
+          </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_stat_strip(items: list[tuple[str, str]]) -> None:
+    blocks = []
+    for label, value in items:
+        safe_label = escape(str(label))
+        safe_value = escape(str(value))
+        blocks.append(
+            f'<div class="stat-tile"><p>{safe_label}</p><h4>{safe_value}</h4></div>'
+        )
+    joined = "".join(blocks)
+    st.markdown(f'<div class="stat-strip">{joined}</div>', unsafe_allow_html=True)
 
 
 def get_query_param(name: str, default: str = "") -> str:
@@ -167,10 +97,26 @@ def clear_steam_session() -> None:
     st.session_state.steam_authenticated = False
     st.session_state.last_steam_id_from_url = ""
     st.session_state.last_steam_auth_loaded_id = ""
+    st.session_state.auto_loaded_library_id = ""
+    st.session_state.auto_loaded_recs_key = ""
     st.session_state.pop("library", None)
     st.session_state.pop("recs", None)
     clear_query_param("steam_id")
     clear_query_param("auth")
+    clear_query_param(RECS_N_QUERY_PARAM)
+
+
+def parse_int_in_range(raw_value: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+    if parsed < min_value:
+        return min_value
+    if parsed > max_value:
+        return max_value
+    return parsed
 
 
 def load_library(steam_id: str) -> dict | None:
@@ -237,12 +183,38 @@ def format_column_label(raw_name: str) -> str:
     return " ".join(fixed_parts)
 
 
+def _cover_placeholder_url(app_id_int: int) -> str:
+    text = quote_plus(f"No Cover - App {app_id_int}")
+    return f"{COVER_PLACEHOLDER_BASE}{text}"
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _resolve_cover_url(app_id_int: int) -> str:
+    candidates = [
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id_int}/header.jpg",
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id_int}/capsule_616x353.jpg",
+        f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id_int}/capsule_467x181.jpg",
+    ]
+
+    for url in candidates:
+        try:
+            response = requests.head(url, timeout=4, allow_redirects=True)
+            if response.ok:
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                if "image" in content_type:
+                    return url
+        except requests.RequestException:
+            continue
+
+    return _cover_placeholder_url(app_id_int)
+
+
 def build_steam_header_image_url(app_id) -> str | None:
     try:
         app_id_int = int(app_id)
     except (TypeError, ValueError):
         return None
-    return f"https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id_int}/header.jpg"
+    return _resolve_cover_url(app_id_int)
 
 
 def to_user_friendly_error(message: str) -> str:
@@ -280,7 +252,7 @@ def get_error_message(response: requests.Response) -> str:
     return to_user_friendly_error(fallback)
 
 
-st.title("Steam Personalized Recommender")
+render_hero()
 
 steam_id_from_url = get_query_param("steam_id", "")
 auth_from_url = get_query_param("auth", "")
@@ -295,13 +267,30 @@ if "last_steam_id_from_url" not in st.session_state:
     st.session_state.last_steam_id_from_url = ""
 if "last_steam_auth_loaded_id" not in st.session_state:
     st.session_state.last_steam_auth_loaded_id = ""
+if "auto_loaded_library_id" not in st.session_state:
+    st.session_state.auto_loaded_library_id = ""
+if "auto_loaded_recs_key" not in st.session_state:
+    st.session_state.auto_loaded_recs_key = ""
 
 # Sync SteamID from URL only when SteamID actually changes (fresh callback),
 # so reruns don't overwrite current local state.
 if steam_id_from_url and steam_id_from_url != st.session_state.last_steam_id_from_url:
+    previous_steam_id = st.session_state.steam_id.strip()
+    profile_switched = bool(previous_steam_id) and previous_steam_id != steam_id_from_url
+
     st.session_state.steam_id = steam_id_from_url
     st.session_state.steam_input = steam_id_from_url
     st.session_state.last_steam_id_from_url = steam_id_from_url
+
+    # Only clear cached profile/recommendations when user really switches profile
+    # inside the same active session. On hard reload we keep query-backed restore.
+    if profile_switched:
+        st.session_state.last_steam_auth_loaded_id = ""
+        st.session_state.auto_loaded_library_id = ""
+        st.session_state.auto_loaded_recs_key = ""
+        st.session_state.pop("library", None)
+        st.session_state.pop("recs", None)
+        clear_query_param(RECS_N_QUERY_PARAM)
 
 # Mark Steam-authenticated only when callback explicitly provides auth=steam.
 if auth_from_url == "steam" and steam_id_from_url:
@@ -311,11 +300,21 @@ if auth_from_url == "steam" and steam_id_from_url:
         if library:
             st.session_state.library = library
             st.session_state.pop("recs", None)
+            st.session_state.auto_loaded_recs_key = ""
+            clear_query_param(RECS_N_QUERY_PARAM)
         st.session_state.last_steam_auth_loaded_id = steam_id_from_url
     clear_query_param("auth")
 
 with st.sidebar:
-    st.header("Login")
+    st.markdown(
+        """
+        <p class="sidebar-eyebrow">ACCOUNT</p>
+        <h2 class="sidebar-title">Login</h2>
+        <p class="sidebar-sub">Connect Steam or use any public profile link.</p>
+        """,
+        unsafe_allow_html=True,
+    )
+
     is_steam_authenticated = bool(st.session_state.steam_authenticated)
     if is_steam_authenticated:
         if st.button("Sign out", use_container_width=True):
@@ -329,14 +328,13 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.divider()
-    st.write("Or paste a Steam profile link:")
+    st.markdown('<p class="sidebar-section-title">Use a Profile URL or SteamID</p>', unsafe_allow_html=True)
     st.text_input(
         "Steam profile URL or SteamID",
         key="steam_input",
         placeholder="Profile URL / SteamID",
     )
-    if st.button("Use this profile"):
+    if st.button("Use this profile", use_container_width=True):
         candidate = st.session_state.steam_input.strip()
         if not candidate:
             st.error("Please enter a Steam profile link or SteamID.")
@@ -347,8 +345,11 @@ with st.sidebar:
                     st.session_state.steam_id = resolved
                     st.session_state.steam_authenticated = False
                     st.session_state.last_steam_auth_loaded_id = ""
+                    st.session_state.auto_loaded_library_id = ""
+                    st.session_state.auto_loaded_recs_key = ""
                     set_query_param("steam_id", resolved)
                     clear_query_param("auth")
+                    clear_query_param(RECS_N_QUERY_PARAM)
                     st.session_state.last_steam_id_from_url = resolved
                     library = load_library(resolved)
                     if library:
@@ -358,16 +359,45 @@ with st.sidebar:
                 st.error("Cannot connect right now. Cause: network/backend request failed.")
             except Exception:
                 st.error("Could not load this profile. Cause: unexpected app error.")
+    st.markdown(
+        '<p class="sidebar-footnote">Tip: Use your custom profile link or a 17-digit SteamID.</p>',
+        unsafe_allow_html=True,
+    )
 
 steam_id = st.session_state.steam_id.strip()
 
 if not steam_id:
-    st.info("Sign in with Steam or paste a Steam profile link to continue.")
+    st.markdown(
+        '<div class="info-banner">Sign in with Steam or paste a Steam profile link to continue.</div>',
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 st.success(f"Using SteamID: {steam_id}")
 
-num_recs = st.number_input("Number of recommendations", min_value=1, max_value=20, value=10, step=1)
+# Auto-restore profile details after page reload using the SteamID in URL/session.
+if "library" not in st.session_state and st.session_state.auto_loaded_library_id != steam_id:
+    library = load_library(steam_id)
+    if library:
+        st.session_state.library = library
+    st.session_state.auto_loaded_library_id = steam_id
+
+saved_recs_n = parse_int_in_range(
+    get_query_param(RECS_N_QUERY_PARAM, str(DEFAULT_RECS_COUNT)),
+    default=DEFAULT_RECS_COUNT,
+    min_value=1,
+    max_value=20,
+)
+
+# Auto-restore recommendations after page reload when recs_n is present in URL.
+recs_restore_key = f"{steam_id}:{saved_recs_n}"
+if get_query_param(RECS_N_QUERY_PARAM, "") and "recs" not in st.session_state and st.session_state.auto_loaded_recs_key != recs_restore_key:
+    restored_recs = load_recommendations(steam_id, saved_recs_n)
+    if restored_recs:
+        st.session_state.recs = restored_recs
+    st.session_state.auto_loaded_recs_key = recs_restore_key
+
+num_recs = st.number_input("Number of recommendations", min_value=1, max_value=20, value=saved_recs_n, step=1)
 left_col, center_col, right_col = st.columns([2, 1, 2])
 with center_col:
     get_recs_clicked = st.button("Get Personalized Recommendations", use_container_width=False)
@@ -376,12 +406,14 @@ if get_recs_clicked:
     recs = load_recommendations(steam_id, int(num_recs))
     if recs:
         st.session_state.recs = recs
+        set_query_param(RECS_N_QUERY_PARAM, str(int(num_recs)))
+        st.session_state.auto_loaded_recs_key = f"{steam_id}:{int(num_recs)}"
 
 if "library" in st.session_state:
     library = st.session_state.library
     profile = library.get("profile", {})
 
-    st.subheader("Steam Profile")
+    st.markdown("### Steam Profile")
     left, right = st.columns([1, 3])
 
     with left:
@@ -391,8 +423,13 @@ if "library" in st.session_state:
 
     with right:
         st.write("**Profile Name:**", profile.get("personaname", "Unknown"))
-        st.write("**Owned Games Count:**", library.get("owned_games_count", 0))
-        st.write("**Recently Played Count:**", library.get("recent_games_count", 0))
+        render_stat_strip(
+            [
+                ("Owned Games", str(library.get("owned_games_count", 0))),
+                ("Recently Played", str(library.get("recent_games_count", 0))),
+                ("Steam ID", steam_id),
+            ]
+        )
 
     with st.expander("Show recently played games"):
         recent = library.get("recent_games", [])
@@ -431,13 +468,18 @@ if "library" in st.session_state:
 if "recs" in st.session_state:
     recs = st.session_state.recs
 
-    st.subheader("Recommendations")
+    st.markdown("### Recommendations")
 
     if recs.get("used_fallback"):
         st.warning("Could not build a personalized profile from your library. Showing fallback recommendations instead.")
 
-    st.write("**Matched games from your library in our dataset:**", recs.get("matched_games_count", 0))
-    st.write("**Owned games returned by Steam:**", recs.get("owned_games_count", 0))
+    render_stat_strip(
+        [
+            ("Matched in Dataset", str(recs.get("matched_games_count", 0))),
+            ("Owned on Steam", str(recs.get("owned_games_count", 0))),
+            ("Recommendation Count", str(len(recs.get("recommendations", [])))),
+        ]
+    )
 
     recommendations = recs.get("recommendations", [])
     if recommendations:

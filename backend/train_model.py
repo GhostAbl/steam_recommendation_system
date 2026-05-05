@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import pyodbc
@@ -9,7 +12,24 @@ from scipy.sparse import hstack, csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler
 
-from backend.config import SQL_CONNECTION_STRING, MODELS_DIR
+try:
+    from backend.config import SQL_CONNECTION_STRING, MODELS_DIR
+except ModuleNotFoundError as e:
+    if e.name != "backend":
+        raise
+    # Support direct execution: python backend/train_model.py
+    root_dir = Path(__file__).resolve().parents[1]
+    if str(root_dir) not in sys.path:
+        sys.path.insert(0, str(root_dir))
+    from backend.config import SQL_CONNECTION_STRING, MODELS_DIR
+
+
+TAG_VECTOR_WEIGHT = 0.55
+OTHER_TEXT_VECTOR_WEIGHT = 0.30
+NUMERIC_VECTOR_WEIGHT = 0.15
+
+TAG_MAX_FEATURES = 3000
+OTHER_TEXT_MAX_FEATURES = 5000
 
 
 SQL_QUERY = """
@@ -112,11 +132,11 @@ def main() -> None:
     for col in ["is_free", "supp_windows", "supp_mac", "supp_linux"]:
         df[col] = df[col].fillna(False).astype(bool)
 
-    # Build text feature column
-    df["text_features"] = (
+    # Split text channels so tags can be explicitly upweighted.
+    df["tag_features"] = df["tags_text"]
+    df["other_text_features"] = (
         df["name"] + " " +
         df["description"] + " " +
-        df["tags_text"] + " " +
         df["dev_text"] + " " +
         df["pub_text"] + " " +
         df["is_free"].astype(str) + " " +
@@ -125,12 +145,17 @@ def main() -> None:
         df["supp_linux"].astype(str)
     )
 
-    # Text vectorization
-    tfidf = TfidfVectorizer(
+    tag_tfidf = TfidfVectorizer(
         stop_words="english",
-        max_features=5000,
+        max_features=TAG_MAX_FEATURES,
     )
-    text_matrix = tfidf.fit_transform(df["text_features"])
+    tags_matrix = tag_tfidf.fit_transform(df["tag_features"]) * TAG_VECTOR_WEIGHT
+
+    other_text_tfidf = TfidfVectorizer(
+        stop_words="english",
+        max_features=OTHER_TEXT_MAX_FEATURES,
+    )
+    other_text_matrix = other_text_tfidf.fit_transform(df["other_text_features"]) * OTHER_TEXT_VECTOR_WEIGHT
 
     # Numeric features for hybrid model
     hybrid_numeric_cols = [
@@ -143,18 +168,31 @@ def main() -> None:
     X_num = df[hybrid_numeric_cols].fillna(0)
 
     scaler = StandardScaler()
-    num_matrix = scaler.fit_transform(X_num)
+    num_matrix = scaler.fit_transform(X_num) * NUMERIC_VECTOR_WEIGHT
 
     combined_matrix = hstack([
-        text_matrix,
+        tags_matrix,
+        other_text_matrix,
         csr_matrix(num_matrix),
-    ])
+    ]).tocsr()
 
     # Save artifacts
     df.to_pickle(MODELS_DIR / "games_dataframe.pkl")
     joblib.dump(combined_matrix, MODELS_DIR / "combined_matrix.joblib")
-    joblib.dump(tfidf, MODELS_DIR / "tfidf_vectorizer.joblib")
+    joblib.dump(other_text_tfidf, MODELS_DIR / "tfidf_vectorizer.joblib")
+    joblib.dump(tag_tfidf, MODELS_DIR / "tags_tfidf_vectorizer.joblib")
     joblib.dump(scaler, MODELS_DIR / "numeric_scaler.joblib")
+    joblib.dump(
+        {
+            "tag_weight": TAG_VECTOR_WEIGHT,
+            "other_text_weight": OTHER_TEXT_VECTOR_WEIGHT,
+            "numeric_weight": NUMERIC_VECTOR_WEIGHT,
+            "tag_max_features": TAG_MAX_FEATURES,
+            "other_text_max_features": OTHER_TEXT_MAX_FEATURES,
+            "numeric_cols": hybrid_numeric_cols,
+        },
+        MODELS_DIR / "model_config.joblib",
+    )
 
     print("Training artifacts saved to:", MODELS_DIR)
     print("Rows:", len(df))
