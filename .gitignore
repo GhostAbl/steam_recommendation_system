@@ -7,5 +7,6 @@ chat_dump_*.err.txt
 chat_share*.html
 chat_transcript*.txt
 extracted_strings.txt
+owned_games_debug.json
 
 .streamlit/
