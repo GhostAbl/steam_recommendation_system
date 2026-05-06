@@ -45,6 +45,26 @@ class SteamRecommender:
         clean = [name.strip() for name in names if isinstance(name, str) and name.strip()]
         return ", ".join(clean[:limit])
 
+    @staticmethod
+    def _extract_tags(tags_text: object, max_tags: int = 6) -> list[str]:
+        raw = str(tags_text or "").strip()
+        if not raw:
+            return []
+        tags: list[str] = []
+        seen: set[str] = set()
+        for token in raw.split():
+            t = token.strip()
+            if not t:
+                continue
+            key = t.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tags.append(t)
+            if len(tags) >= max_tags:
+                break
+        return tags
+
     def _build_fallback_reason(self, row: pd.Series, max_players: float, max_owners: float) -> str:
         review_rate = float(row.get("positive_review_rate", 0.0))
         review_pct = review_rate * 100.0
@@ -153,6 +173,8 @@ class SteamRecommender:
             {
                 "id_game": int(row["id_game"]),
                 "name": row["name"],
+                "description": str(row.get("description", "") or "").strip(),
+                "tags": self._extract_tags(row.get("tags_text", "")),
                 "score": round(float(row["fallback_score"]), 4),
                 "reason": self._build_fallback_reason(row, max_players=max_players, max_owners=max_owners),
             }
@@ -232,10 +254,11 @@ class SteamRecommender:
                 {
                     "id_game": int(row["id_game"]),
                     "name": row["name"],
+                    "description": str(row.get("description", "") or "").strip(),
+                    "tags": self._extract_tags(row.get("tags_text", "")),
                     "score": round(float(row["final_score"]), 4),
                     "similarity": round(float(row["similarity"]), 4),
                     "price": float(row["price"]) if pd.notnull(row.get("price")) else 0.0,
-                    "avg_playtime": float(row["avg_playtime"]) if pd.notnull(row.get("avg_playtime")) else 0.0,
                     "positive_review_rate": round(float(row["positive_review_rate"]) * 100, 2),
                     "reason": self._build_personalized_reason(
                         row,

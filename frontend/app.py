@@ -36,7 +36,6 @@ HIDDEN_RECENT_GAME_COLUMNS = {
 }
 PLAYTIME_COLUMNS = {"playtime_2weeks", "playtime_forever"}
 RECOMMENDATION_COLUMN_LABELS = {
-    "avg_playtime": "avg_playtime (min)",
     "price": "price (USD)",
 }
 COVER_PLACEHOLDER_BASE = "https://placehold.co/460x215/0d2338/8fd8ff?text="
@@ -166,6 +165,8 @@ def format_playtime_value(value):
 def format_price_value(value):
     try:
         price = float(value)
+        if price <= 0:
+            return "Free"
         return f"${price:,.2f}"
     except (TypeError, ValueError):
         return value
@@ -183,9 +184,89 @@ def format_column_label(raw_name: str) -> str:
     return " ".join(fixed_parts)
 
 
+def clamp_text(value: object, max_chars: int = 220) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "No description available."
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{cut}..." if cut else f"{text[:max_chars]}..."
+
+
+def render_recommendation_cards(recommendations: list[dict]) -> None:
+    cards: list[str] = []
+    for item in recommendations:
+        name = escape(str(item.get("name", "Unknown game")))
+        price_text = escape(str(format_price_value(item.get("price", 0))))
+        review_text = escape(f"{float(item.get('positive_review_rate', 0.0)):.1f}% positive")
+        similarity_text = escape(f"Similarity {float(item.get('similarity', 0.0)):.2f}")
+        score_text = escape(f"Score {float(item.get('score', 0.0)):.3f}")
+
+        raw_description = str(item.get("description", "") or "").strip()
+        description_text = escape(clamp_text(raw_description, max_chars=170))
+        full_description = escape(raw_description) if raw_description else "No description available."
+        has_long_description = len(raw_description) > 170
+        reason_text = escape(clamp_text(item.get("reason", ""), max_chars=170))
+        raw_tags = item.get("tags", [])
+        tags_list = raw_tags if isinstance(raw_tags, list) else []
+        tag_chips = "".join(
+            f'<span class="rec-tag">{escape(str(tag).strip())}</span>'
+            for tag in tags_list
+            if str(tag).strip()
+        )
+        tags_block = f'<div class="rec-tags">{tag_chips}</div>' if tag_chips else ""
+
+        cover_url = build_steam_header_image_url(item.get("id_game")) or f"{COVER_PLACEHOLDER_BASE}No+Cover"
+        safe_cover_url = escape(cover_url)
+        store_url = build_steam_store_url(item.get("id_game"))
+        safe_store_url = escape(store_url) if store_url else ""
+        more_description_html = (
+            f'<details class="rec-more"><summary>View more</summary><p>{full_description}</p></details>'
+            if has_long_description
+            else ""
+        )
+
+        card_html = (
+            f'<article class="rec-card">'
+            f'<img class="rec-cover" src="{safe_cover_url}" alt="{name} cover" loading="lazy" />'
+            f'<div class="rec-body">'
+            f"<h4>{name}</h4>"
+            f'<div class="rec-meta">'
+            f'<span class="rec-pill rec-pill-price">{price_text}</span>'
+            f'<span class="rec-pill">{review_text}</span>'
+            f'<span class="rec-pill">{similarity_text}</span>'
+            f'<span class="rec-pill">{score_text}</span>'
+            f"</div>"
+            f'<p class="rec-desc">{description_text}</p>'
+            f"{more_description_html}"
+            f'<p class="rec-reason">{reason_text}</p>'
+            f"{tags_block}"
+            f"</div>"
+            f"</article>"
+        )
+
+        if safe_store_url:
+            cards.append(
+                f'<a class="rec-link" href="{safe_store_url}" target="_blank" rel="noopener noreferrer">{card_html}</a>'
+            )
+        else:
+            cards.append(card_html)
+
+    st.markdown(f'<section class="rec-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
+
+
 def _cover_placeholder_url(app_id_int: int) -> str:
     text = quote_plus(f"No Cover - App {app_id_int}")
     return f"{COVER_PLACEHOLDER_BASE}{text}"
+
+
+def build_steam_store_url(app_id) -> str | None:
+    try:
+        app_id_int = int(app_id)
+    except (TypeError, ValueError):
+        return None
+    return f"https://store.steampowered.com/app/{app_id_int}/"
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -483,33 +564,49 @@ if "recs" in st.session_state:
 
     recommendations = recs.get("recommendations", [])
     if recommendations:
-        display_recommendations = [
-            {
-                "cover": build_steam_header_image_url(item.get("id_game")),
-                **{
-                    format_column_label(RECOMMENDATION_COLUMN_LABELS.get(k, k)): ( # type: ignore
-                        format_price_value(v)
-                        if k == "price"
-                        else format_playtime_value(v)
-                        if k == "avg_playtime"
-                        else v
-                    )
-                    for k, v in item.items()
-                    if k != "id_game"
-                },
-            }
-            for item in recommendations
-        ]
-        st.dataframe(
-            display_recommendations,
-                use_container_width=True,
-                column_config={
-                    "cover": st.column_config.ImageColumn(
-                        "Cover",
-                        help="Steam game cover image",
-                        width="medium",
-                    )
-                },
-            )
+        view_mode = st.radio(
+            "Recommendation view",
+            options=["Card View", "Table View"],
+            horizontal=True,
+            key="recommendation_view_mode",
+        )
+
+        if view_mode == "Card View":
+            render_recommendation_cards(recommendations)
+        else:
+            display_recommendations = [
+                {
+                    "cover": build_steam_header_image_url(item.get("id_game")),
+                    **{
+                        format_column_label(RECOMMENDATION_COLUMN_LABELS.get(k, k)): ( # type: ignore
+                            format_price_value(v)
+                            if k == "price"
+                            else v
+                        )
+                        for k, v in item.items()
+                        if k != "id_game"
+                    },
+                }
+                for item in recommendations
+            ]
+            st.dataframe(
+                display_recommendations,
+                    use_container_width=True,
+                    column_config={
+                        "cover": st.column_config.ImageColumn(
+                            "Cover",
+                            help="Steam game cover image",
+                            width="medium",
+                        ),
+                        "Description": st.column_config.TextColumn(
+                            "Description",
+                            width="large",
+                        ),
+                        "Reason": st.column_config.TextColumn(
+                            "Reason",
+                            width="large",
+                        ),
+                    },
+                )
     else:
         st.info("No recommendations available.")
