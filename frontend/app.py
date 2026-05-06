@@ -172,6 +172,23 @@ def format_price_value(value):
         return value
 
 
+def format_discount_value(value) -> str | None:
+    try:
+        discount_raw = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if discount_raw <= 0:
+        return None
+
+    # Support both 0-1 and 0-100 discount formats.
+    discount_pct = discount_raw * 100 if discount_raw <= 1 else discount_raw
+    discount_pct = round(discount_pct)
+    if discount_pct <= 0:
+        return None
+    return f"{discount_pct}% OFF"
+
+
 def format_column_label(raw_name: str) -> str:
     parts = raw_name.replace("_", " ").split()
     fixed_parts = []
@@ -194,19 +211,46 @@ def clamp_text(value: object, max_chars: int = 220) -> str:
     return f"{cut}..." if cut else f"{text[:max_chars]}..."
 
 
+def split_text_preview_and_rest(value: object, max_chars: int = 170) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "No description available.", ""
+
+    if len(text) <= max_chars:
+        return text, ""
+
+    head = text[:max_chars]
+    last_space = head.rfind(" ")
+    if last_space > int(max_chars * 0.6):
+        preview_core = head[:last_space].rstrip()
+    else:
+        preview_core = head.rstrip()
+
+    if not preview_core:
+        preview_core = head
+
+    rest = text[len(preview_core):].lstrip(" \t\n\r,.;:-")
+    return preview_core, rest
+
+
 def render_recommendation_cards(recommendations: list[dict]) -> None:
     cards: list[str] = []
-    for item in recommendations:
+    for rank, item in enumerate(recommendations, start=1):
         name = escape(str(item.get("name", "Unknown game")))
+        rank_text = escape(f"#{rank}")
         price_text = escape(str(format_price_value(item.get("price", 0))))
+        discount_label = format_discount_value(item.get("discount", 0))
         review_text = escape(f"{float(item.get('positive_review_rate', 0.0)):.1f}% positive")
         similarity_text = escape(f"Similarity {float(item.get('similarity', 0.0)):.2f}")
         score_text = escape(f"Score {float(item.get('score', 0.0)):.3f}")
 
-        raw_description = str(item.get("description", "") or "").strip()
-        description_text = escape(clamp_text(raw_description, max_chars=170))
-        full_description = escape(raw_description) if raw_description else "No description available."
-        has_long_description = len(raw_description) > 170
+        preview_description, remaining_description = split_text_preview_and_rest(
+            item.get("description", ""),
+            max_chars=170,
+        )
+        description_text = escape(preview_description)
+        remaining_description_text = escape(remaining_description)
+        has_long_description = bool(remaining_description)
         reason_text = escape(clamp_text(item.get("reason", ""), max_chars=170))
         raw_tags = item.get("tags", [])
         tags_list = raw_tags if isinstance(raw_tags, list) else []
@@ -222,8 +266,23 @@ def render_recommendation_cards(recommendations: list[dict]) -> None:
         store_url = build_steam_store_url(item.get("id_game"))
         safe_store_url = escape(store_url) if store_url else ""
         more_description_html = (
-            f'<details class="rec-more"><summary>View more</summary><p>{full_description}</p></details>'
+            (
+                f'<details class="rec-more">'
+                f'<summary><span class="rec-more-label">View more</span><span class="rec-less-label">View less</span></summary>'
+                f"</details>"
+            )
             if has_long_description
+            else ""
+        )
+        description_html = (
+            f'<p class="rec-desc">{description_text}'
+            + (f'<span class="rec-desc-ellipsis">...</span>' if has_long_description else "")
+            + (f'<span class="rec-desc-rest-inline"> {remaining_description_text}</span>' if has_long_description else "")
+            + "</p>"
+        )
+        discount_html = (
+            f'<span class="rec-pill rec-pill-discount">{escape(discount_label)}</span>'
+            if discount_label
             else ""
         )
 
@@ -233,12 +292,14 @@ def render_recommendation_cards(recommendations: list[dict]) -> None:
             f'<div class="rec-body">'
             f"<h4>{name}</h4>"
             f'<div class="rec-meta">'
+            f'<span class="rec-pill rec-pill-rank">{rank_text}</span>'
             f'<span class="rec-pill rec-pill-price">{price_text}</span>'
+            f"{discount_html}"
             f'<span class="rec-pill">{review_text}</span>'
             f'<span class="rec-pill">{similarity_text}</span>'
             f'<span class="rec-pill">{score_text}</span>'
             f"</div>"
-            f'<p class="rec-desc">{description_text}</p>'
+            f"{description_html}"
             f"{more_description_html}"
             f'<p class="rec-reason">{reason_text}</p>'
             f"{tags_block}"
@@ -391,7 +452,7 @@ with st.sidebar:
         """
         <p class="sidebar-eyebrow">ACCOUNT</p>
         <h2 class="sidebar-title">Login</h2>
-        <p class="sidebar-sub">Connect Steam or use any public profile link.</p>
+        <p class="sidebar-sub">Connect your Steam account</p>
         """,
         unsafe_allow_html=True,
     )
@@ -409,7 +470,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.markdown('<p class="sidebar-section-title">Use a Profile URL or SteamID</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-section-title">OR use a Profile URL or SteamID</p>', unsafe_allow_html=True)
     st.text_input(
         "Steam profile URL or SteamID",
         key="steam_input",
@@ -454,7 +515,10 @@ if not steam_id:
     )
     st.stop()
 
-st.success(f"Using SteamID: {steam_id}")
+st.markdown(
+    f'<div class="status-banner">Using SteamID: {escape(steam_id)}</div>',
+    unsafe_allow_html=True,
+)
 
 # Auto-restore profile details after page reload using the SteamID in URL/session.
 if "library" not in st.session_state and st.session_state.auto_loaded_library_id != steam_id:

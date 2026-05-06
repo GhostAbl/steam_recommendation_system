@@ -176,6 +176,7 @@ class SteamRecommender:
                 "description": str(row.get("description", "") or "").strip(),
                 "tags": self._extract_tags(row.get("tags_text", "")),
                 "score": round(float(row["fallback_score"]), 4),
+                "discount": float(row["discount"]) if pd.notnull(row.get("discount")) else 0.0,
                 "reason": self._build_fallback_reason(row, max_players=max_players, max_owners=max_owners),
             }
             for _, row in top.iterrows()
@@ -259,6 +260,7 @@ class SteamRecommender:
                     "score": round(float(row["final_score"]), 4),
                     "similarity": round(float(row["similarity"]), 4),
                     "price": float(row["price"]) if pd.notnull(row.get("price")) else 0.0,
+                    "discount": float(row["discount"]) if pd.notnull(row.get("discount")) else 0.0,
                     "positive_review_rate": round(float(row["positive_review_rate"]) * 100, 2),
                     "reason": self._build_personalized_reason(
                         row,
